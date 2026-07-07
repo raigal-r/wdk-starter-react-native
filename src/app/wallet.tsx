@@ -4,19 +4,18 @@ import { Balance } from '@tetherto/wdk-uikit-react-native';
 import { useDebouncedNavigation } from '@/hooks/use-debounced-navigation';
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
-  Palette,
+  Plus,
   QrCode,
+  RefreshCw,
   Settings,
-  Shield,
-  Star,
 } from 'lucide-react-native';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
   Image,
-  Linking,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -62,6 +61,7 @@ export default function WalletScreen() {
     isLoading,
     isUnlocked,
     refreshWalletBalance,
+    refreshTransactions,
     balances,
     addresses,
     transactions: walletTransactions,
@@ -89,7 +89,7 @@ export default function WalletScreen() {
     const map = new Map<string, { totalBalance: number }>();
 
     // Sum up balances by denomination across all networks
-    balances.list.forEach(balance => {
+    balances.list.forEach((balance) => {
       const current = map.get(balance.denomination) || { totalBalance: 0 };
       map.set(balance.denomination, {
         totalBalance: current.totalBalance + parseFloat(balance.value),
@@ -117,7 +117,7 @@ export default function WalletScreen() {
 
     return (await Promise.all(promises))
       .filter(Boolean)
-      .filter(asset => asset && asset.balance > 0) // Only show tokens with positive balance
+      .filter((asset) => asset && asset.balance > 0) // Only show tokens with positive balance
       .sort((a, b) => (b?.usdValue || 0) - (a?.usdValue || 0)); // Sort by USD value descending
   };
 
@@ -133,37 +133,13 @@ export default function WalletScreen() {
     extrapolate: 'clamp',
   });
 
-  const suggestions = [
-    {
-      id: 1,
-      icon: Star,
-      title: 'Star repo on GitHub',
-      color: colors.primary,
-      url: 'https://github.com/tetherto/wdk-starter-react-native',
-    },
-    {
-      id: 2,
-      icon: Shield,
-      title: 'Explore the WDK docs',
-      color: colors.primary,
-      url: 'https://docs.wallet.tether.io/',
-    },
-    {
-      id: 3,
-      icon: Palette,
-      title: 'Explore the WDK UI Kit',
-      color: colors.primary,
-      url: 'https://github.com/tetherto/wdk-uikit-react-native',
-    },
-  ];
-
   // Get real transactions from wallet data
   const getTransactions = async () => {
     if (!walletTransactions) return [];
 
     // Get the wallet's own addresses for comparison
     const walletAddresses = addresses
-      ? Object.values(addresses).map(addr => addr?.toLowerCase())
+      ? Object.values(addresses).map((addr) => addr?.toLowerCase())
       : [];
 
     const result = await Promise.all(
@@ -210,6 +186,14 @@ export default function WalletScreen() {
     router.push('/receive/select-token');
   };
 
+  const handleBuyPress = () => {
+    router.push('/buy');
+  };
+
+  const handleSwapPress = () => {
+    router.push('/swap');
+  };
+
   const handleQRPress = () => {
     router.push('/scan-qr');
   };
@@ -235,7 +219,7 @@ export default function WalletScreen() {
 
     setRefreshing(true);
     try {
-      await refreshWalletBalance();
+      await Promise.all([refreshWalletBalance(), refreshTransactions()]);
     } catch (error) {
       console.error('Failed to refresh wallet data:', error);
     } finally {
@@ -283,6 +267,17 @@ export default function WalletScreen() {
         </View>
 
         <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.settingsButton}
+            onPress={handleRefresh}
+            disabled={refreshing}
+          >
+            {refreshing ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <RefreshCw size={22} color={colors.primary} />
+            )}
+          </TouchableOpacity>
           <TouchableOpacity style={styles.settingsButton} onPress={handleSettingsPress}>
             <Settings size={24} color={colors.primary} />
           </TouchableOpacity>
@@ -350,8 +345,14 @@ export default function WalletScreen() {
 
         {/* Portfolio */}
         <View style={styles.portfolioSection}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Tokens</Text>
+            <TouchableOpacity onPress={handleSeeAllTokens}>
+              <Text style={styles.seeAllText}>See All</Text>
+            </TouchableOpacity>
+          </View>
           {aggregatedBalances.length > 0 ? (
-            aggregatedBalances.map(asset => {
+            aggregatedBalances.map((asset) => {
               if (!asset) return null;
 
               return (
@@ -392,49 +393,24 @@ export default function WalletScreen() {
               <Text style={styles.noAssetsText}>No assets found</Text>
             </View>
           )}
-
-          <TouchableOpacity onPress={handleSeeAllTokens}>
-            <Text style={styles.seeAllText}>See All</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Suggestions */}
-        <View style={styles.suggestionsSection}>
-          <View style={styles.suggestionsHeader}>
-            <Text style={styles.sectionTitle}>Suggestions</Text>
-          </View>
-
-          <View style={styles.suggestionsGrid}>
-            {suggestions.map(suggestion => (
-              <TouchableOpacity
-                onPress={() => {
-                  Linking.openURL(suggestion.url);
-                }}
-                key={suggestion.id}
-                style={styles.suggestionCard}
-              >
-                <suggestion.icon size={24} color={suggestion.color} />
-                <Text style={styles.suggestionText}>{suggestion.title}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
         </View>
 
         {/* Activity */}
         <View style={styles.activitySection}>
-          <View
-            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
-          >
-            <Text style={styles.sectionTitle}>Activity</Text>
-            {walletTransactions.isLoading ? (
-              <View style={{ marginRight: 8 }}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={styles.sectionTitle}>Activity</Text>
+              {walletTransactions.isLoading ? (
                 <ActivityIndicator size="small" color={colors.primary} />
-              </View>
-            ) : null}
+              ) : null}
+            </View>
+            <TouchableOpacity onPress={handleSeeAllActivity}>
+              <Text style={styles.seeAllText}>See All</Text>
+            </TouchableOpacity>
           </View>
 
           {transactions.length > 0 ? (
-            transactions.map(tx => (
+            transactions.map((tx) => (
               <View key={tx.id} style={styles.transactionRow}>
                 <View style={styles.transactionIcon}>
                   <tx.icon size={16} color={tx.iconColor} />
@@ -456,10 +432,6 @@ export default function WalletScreen() {
               <Text style={styles.noAssetsText}>No transactions yet</Text>
             </View>
           )}
-
-          <TouchableOpacity onPress={handleSeeAllActivity}>
-            <Text style={styles.seeAllText}>See All</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
 
@@ -470,8 +442,18 @@ export default function WalletScreen() {
           <Text style={styles.actionButtonText}>Send</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.actionButton} onPress={handleSwapPress}>
+          <ArrowLeftRight size={20} color={colors.white} />
+          <Text style={styles.actionButtonText}>Swap</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.qrButton} onPress={handleQRPress}>
           <QrCode size={24} color={colors.black} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.actionButton} onPress={handleBuyPress}>
+          <Plus size={20} color={colors.white} />
+          <Text style={styles.actionButtonText}>Buy</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.actionButton} onPress={handleReceivePress}>
@@ -492,7 +474,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 120,
+    // Clear the floating bottom action bar (80 tall + 20 offset + margin)
+    paddingBottom: 160,
     flexGrow: 1,
   },
   header: {
@@ -593,44 +576,20 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   seeAllText: {
-    fontSize: 16,
+    fontSize: 14,
+    fontWeight: '600',
     color: colors.primary,
-    textAlign: 'center',
   },
-  suggestionsSection: {
-    paddingHorizontal: 20,
-    marginBottom: 32,
-  },
-  suggestionsHeader: {
+  sectionHeaderRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: colors.text,
-  },
-  suggestionsGrid: {
-    flexDirection: 'row',
-    marginHorizontal: -6,
-  },
-  suggestionCard: {
-    flex: 1,
-    backgroundColor: colors.card,
-    marginHorizontal: 6,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    minHeight: 80,
-  },
-  suggestionText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 16,
   },
   activitySection: {
     paddingHorizontal: 20,
@@ -680,8 +639,8 @@ const styles = StyleSheet.create({
   bottomActions: {
     position: 'absolute',
     bottom: 20,
-    left: 72,
-    right: 72,
+    left: 24,
+    right: 24,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
