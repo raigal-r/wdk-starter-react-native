@@ -49,6 +49,16 @@ For detailed documentation about the complete WDK ecosystem, visit [docs.wallet.
 - **Multi-Asset View**: Aggregate portfolio view across all tokens and chains
 - **Asset Details**: Detailed views for individual tokens with transaction history
 
+### Fiat On-Ramp (MoonPay)
+- **Buy USD₮ with a card**: In-app purchase flow powered by `@tetherto/wdk-protocol-fiat-moonpay`
+- **Live quotes**: Fees and receive amounts fetched before checkout
+- **Secure checkout**: Card entry, KYC, and 3DS handled by the MoonPay widget in an in-app browser
+
+### In-App Swaps (Velora)
+- **DEX aggregator swaps**: USD₮ → XAU₮/WETH on Ethereum, Arbitrum, and Polygon via `@tetherto/wdk-protocol-swap-velora-evm`
+- **Gas paid in USD₮**: ERC-4337 paymaster covers gas, so users fresh off the on-ramp never need ETH
+- **Live quotes & USD estimates**: Velora quotes plus spot prices from the Bitfinex/CoinGecko pricing modules
+
 ### User Experience
 - **QR Code Scanner**: Scan wallet addresses and payment requests via camera
 - **Send Flows**: Complete send flow with network and token selection
@@ -84,7 +94,14 @@ cp .env.example .env
 # EXPO_PUBLIC_WDK_INDEXER_API_KEY=your_wdk_api_key_here
 # EXPO_PUBLIC_TRON_API_KEY=your_tron_api_key_here (optional, for Tron network)
 # EXPO_PUBLIC_TRON_API_SECRET=your_tron_api_secret_here (optional, for Tron network)
+
+# MoonPay fiat on-ramp (required for the Buy flow)
+# EXPO_PUBLIC_MOONPAY_API_KEY=pk_test_your_key_here
+# EXPO_PUBLIC_MOONPAY_ENVIRONMENT=sandbox
+# EXPO_PUBLIC_MOONPAY_SIGN_URL=https://your-backend/moonpay/sign-url (optional; required in production)
 ```
+
+**MoonPay:** Create an account at [dashboard.moonpay.com](https://dashboard.moonpay.com) and use the sandbox `pk_test_` key during development ([sandbox test cards](https://dev.moonpay.com/docs/faq-sandbox-testing)). In production, MoonPay requires widget URLs to be signed with your secret key — host a small signing endpoint on your backend and set `EXPO_PUBLIC_MOONPAY_SIGN_URL`; never ship the secret key in the app.
 
 **Note:** The WDK Indexer API key is used for balance and transaction API requests. While not mandatory for development, it enables full functionality. Tron API keys are optional and only needed if you want to use the Tron network. Get your free WDK Indexer API key in the [WDK docs](https://docs.wallet.tether.io/).
 
@@ -157,7 +174,9 @@ src/
 │   ├── networks.ts              # Network configurations
 │   └── get-chains-config.ts     # Chain-specific settings & provider URLs
 ├── services/                    # Business logic & external services
-│   └── pricing-service.ts       # Fiat pricing via Bitfinex
+│   ├── pricing-service.ts       # Fiat pricing via Bitfinex (CoinGecko fallback)
+│   ├── fiat-service.ts          # MoonPay fiat on-ramp (buy USD₮ with card)
+│   └── swap-service.ts          # Velora DEX aggregator swaps (ERC-4337)
 ├── hooks/                       # Custom React hooks
 │   ├── use-debounced-navigation.ts  # Debounced navigation to prevent rapid taps
 │   ├── use-keyboard.ts          # Keyboard visibility detection
@@ -232,6 +251,21 @@ The app follows a clean architecture pattern with clear separation of concerns:
 2. **Select Token** → Choose token to receive
 3. **Select Network** → Choose blockchain network
 4. **Receive Details** → View QR code and address, copy or share
+
+#### Buy Flow (Fiat On-Ramp)
+1. **Wallet Dashboard** → Tap "Buy" button
+2. **Enter Amount** → Pick a preset or type a USD amount; a live MoonPay quote shows fees and USD₮ received
+3. **Buy with MoonPay** → The MoonPay widget opens in an in-app browser for card entry and KYC
+4. **Done** → USD₮ is delivered on-chain to the wallet's Ethereum address; balance updates on refresh
+
+#### Swap Flow (Velora DEX Aggregator)
+1. **Wallet Dashboard** → Tap "Swap" button
+2. **Select Network** → Ethereum, Arbitrum, or Polygon
+3. **Enter Amount** → USD₮ amount to swap; a live Velora quote shows the estimated receive amount, USD value, and network fee (paid in USD₮)
+4. **Swap** → Approves the Velora router if needed, then executes via the ERC-4337 smart account
+5. **Done** → Transaction hash shown; balances refresh automatically
+
+> **PoC note:** the published RN provider does not yet expose swap operations from the secure worklet, so the swap service reconstructs the same ERC-4337 smart account on the JS thread from the wallet seed (`src/services/swap-service.ts`). This briefly materializes the seed outside the worklet — fine for a demo, but the long-term home for swap execution is the WDK worklet itself.
 
 ## 🌐 Supported Networks & Operations
 
@@ -396,6 +430,30 @@ Update the brand configuration in `src/app/_layout.tsx`:
 ## 🐛 Troubleshooting
 
 ### Common Issues
+
+**`npm install` fails in `@tetherto/pear-wrk-wdk` postinstall (`Bail: UNKNOWN_FLAG: target`)**
+
+The package's postinstall regenerates a worklet bundle with `bare-pack`, whose CLI flags changed in newer releases. The RN provider ships its own prebuilt worklet bundle, so the postinstall isn't needed:
+```bash
+npm install --ignore-scripts --legacy-peer-deps
+```
+
+**Metro fails with `Unable to resolve module @ton/core` (or missing `@wdk/*` packages)**
+
+Two related install pitfalls:
+- `@tetherto/pear-wrk-wdk` must stay pinned to `1.0.0-beta.5` (exact, no `^`). Newer betas (beta.8+) have a completely different dependency layout (no `@wdk/*` git packages), which doesn't match the RN provider's prebuilt worklet — a caret range silently upgrades and strips the `@wdk/*`/`@ton/ton` tree from the lockfile.
+- `--legacy-peer-deps` skips peer dependencies, and `@ton/ton` needs `@ton/core`/`@ton/crypto` as peers. They are declared as direct dependencies in `package.json` for this reason — don't remove them.
+
+If the tree gets into a bad state, reset with `rm -rf node_modules && npm install --ignore-scripts --legacy-peer-deps`.
+
+**App crashes (SIGABRT) right after creating a wallet — crash report shows `bare_runtime__on_unhandled_rejection` → `abort` in BareKit**
+
+The RN provider ships a prebuilt worklet bundle that loads **exact versions** of the Bare native addons linked into the app binary (visible in the simulator's unified log as `ADDON_NOT_FOUND: ... Candidates: - linked:bare-tcp.2.0.9.framework`). If npm resolves newer addon versions (e.g. `bare-tcp@2.5.1`), the freshly built app links those instead and the worklet aborts the whole process on first use. `package.json` pins the expected versions (`bare-buffer@3.4.0`, `bare-pipe@4.0.7`, `bare-tcp@2.0.9`, `bare-type@1.0.8`, `bare-url@2.3.0`) as direct dependencies + `overrides` — don't remove them, and **rebuild the native app** (`npx expo run:ios`) after any change to them, since the addons are linked at build time.
+
+Tip: worklet errors don't reach Metro. Read them from the simulator's unified log:
+```bash
+xcrun simctl spawn booted log show --last 5m 2>/dev/null | grep -A5 "Uncaught (in promise)"
+```
 
 **Metro bundler cache issues**
 ```bash
