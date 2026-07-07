@@ -3,7 +3,9 @@ const getChainsConfig = () => {
     ethereum: {
       chainId: 1,
       blockchain: 'ethereum',
-      provider: 'https://eth.merkle.io',
+      // eth.merkle.io rate-limits aggressively (HTTP 429), which stalls
+      // ERC-4337 address resolution forever during wallet creation
+      provider: 'https://eth.drpc.org',
       bundlerUrl: 'https://api.candide.dev/public/v3/ethereum',
       paymasterUrl: 'https://api.candide.dev/public/v3/ethereum',
       paymasterAddress: '0x8b1f6cb5d062aa2ce8d581942bbb960420d875ba',
